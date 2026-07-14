@@ -6,7 +6,8 @@ registry server and no `encore publish` command in Encore v1.
 ## New Package
 
 1. Publish a signed or annotated version tag in the package source repository.
-2. Build a reproducible `.tar.gz` with `encore.toml` at its root.
+2. Build a reproducible `.tar.gz` with `encore.toml` at its root and without
+   generated build output.
 3. Run `encore test` against the packaged source.
 4. Upload the exact archive as a GitHub Release asset.
 5. Compute its lowercase SHA-256.
