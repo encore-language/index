@@ -13,10 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Validate sparse metadata
         shell: bash
         run: |
           set -euo pipefail
+
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            git fetch --no-tags origin "$GITHUB_BASE_REF"
+            if git diff --name-only --diff-filter=D "origin/$GITHUB_BASE_REF...HEAD" -- '??/*.json' | grep -q .; then
+              echo "Published metadata files cannot be deleted" >&2
+              exit 1
+            fi
+          fi
+
           find . -mindepth 2 -maxdepth 2 -type f -name '*.json' -print0 |
           while IFS= read -r -d '' file; do
             jq -e '
@@ -33,4 +44,49 @@ jobs:
             test "$file" = "./${name:0:2}/$name.json"
             versions=$(jq -r '.versions[].version' "$file")
             test "$(printf '%s\n' "$versions" | sort -u | wc -l)" -eq "$(printf '%s\n' "$versions" | wc -l)"
+
+            if [ -n "${GITHUB_BASE_REF:-}" ] && git cat-file -e "origin/$GITHUB_BASE_REF:${file#./}" 2>/dev/null; then
+              old=$(mktemp)
+              git show "origin/$GITHUB_BASE_REF:${file#./}" > "$old"
+              jq -e --slurpfile old "$old" '
+                . as $new |
+                .name == $old[0].name and
+                all($old[0].versions[];
+                  . as $previous |
+                  any($new.versions[];
+                      .version == $previous.version and
+                      .archive == $previous.archive and
+                      .checksum == $previous.checksum and
+                      (.yanked == $previous.yanked or
+                        ($previous.yanked == false and .yanked == true))
+                    )
+                )
+              ' "$file" >/dev/null
+              rm -f "$old"
+            fi
+
+            while IFS=$'\t' read -r version archive checksum; do
+              work=$(mktemp -d)
+              curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
+                -o "$work/package.tar.gz" "$archive"
+              printf '%s  %s\n' "$checksum" "$work/package.tar.gz" | sha256sum --check --status
+              tar -tzf "$work/package.tar.gz" > "$work/listing"
+              while IFS= read -r member; do
+                clean=${member#./}
+                case "$clean" in
+                  /*|../*|*/../*|*/..) echo "Unsafe archive member: $member" >&2; exit 1 ;;
+                esac
+              done < "$work/listing"
+              tar -xzf "$work/package.tar.gz" -C "$work"
+              test -f "$work/encore.toml"
+              manifest_name=$(sed -n 's/^name = "\([^"]*\)"/\1/p' "$work/encore.toml" | head -n 1)
+              manifest_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$work/encore.toml" | head -n 1)
+              test "$manifest_name" = "$name"
+              test "$manifest_version" = "$version"
+              if grep -Fq 'path@' "$work/encore.toml"; then
+                echo "Published package $name $version contains a path dependency" >&2
+                exit 1
+              fi
+              rm -rf "$work"
+            done < <(jq -r '.versions[] | [.version, .archive, .checksum] | @tsv' "$file")
           done
