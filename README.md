@@ -21,6 +21,11 @@ Each file contains all published versions in release order. Existing version
 records and release assets are immutable. Broken versions are yanked rather
 than deleted so existing Encore lockfiles remain reproducible.
 
+`index@name` always refers to this public catalog. A release archive may also
+bundle implementation-only refrains under `workspace/<name>` and reference
+them as `workspace@name`; embedded refrains do not receive separate index
+entries.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) to publish or yank a package. Compiler
 behavior and the complete author workflow are documented in the
 [Encore package guide](https://github.com/encore-language/encore/blob/trunk/docs/enbook-en/src/publishing-packages.md).
