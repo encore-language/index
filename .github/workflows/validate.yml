@@ -71,12 +71,19 @@ jobs:
                 -o "$work/package.tar.gz" "$archive"
               printf '%s  %s\n' "$checksum" "$work/package.tar.gz" | sha256sum --check --status
               tar -tzf "$work/package.tar.gz" > "$work/listing"
+              tar -tvzf "$work/package.tar.gz" > "$work/types"
               while IFS= read -r member; do
                 clean=${member#./}
                 case "$clean" in
                   /*|../*|*/../*|*/..) echo "Unsafe archive member: $member" >&2; exit 1 ;;
                 esac
               done < "$work/listing"
+              if awk 'substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d" { exit 1 }' "$work/types"; then
+                :
+              else
+                echo "Package archive contains links or special files: $name $version" >&2
+                exit 1
+              fi
               tar -xzf "$work/package.tar.gz" -C "$work"
               test -f "$work/encore.toml"
               manifest_name=$(sed -n 's/^name = "\([^"]*\)"/\1/p' "$work/encore.toml" | head -n 1)
@@ -87,6 +94,60 @@ jobs:
                 echo "Published package $name $version contains a path dependency" >&2
                 exit 1
               fi
+
+              declare -A workspace_state=()
+              declare -A workspace_names=()
+              validate_workspace_manifest() {
+                local relative=$1
+                local manifest="$work/$relative/encore.toml"
+                local package_name dependency dependency_name dependency_relative
+
+                if [ "${workspace_state[$relative]:-}" = visiting ]; then
+                  echo "workspace@ dependency cycle at $relative in $name $version" >&2
+                  return 1
+                fi
+                if [ "${workspace_state[$relative]:-}" = done ]; then
+                  return 0
+                fi
+                test -f "$manifest" || {
+                  echo "Missing $relative/encore.toml in $name $version" >&2
+                  return 1
+                }
+                workspace_state[$relative]=visiting
+                package_name=$(sed -n 's/^name = "\([^"]*\)"/\1/p' "$manifest" | head -n 1)
+                [[ "$package_name" =~ ^[a-z0-9_-]{2,}$ ]] || {
+                  echo "Invalid package name in $relative/encore.toml" >&2
+                  return 1
+                }
+                if [ -n "${workspace_names[$package_name]:-}" ] && [ "${workspace_names[$package_name]}" != "$relative" ]; then
+                  echo "Duplicate refrain name $package_name in $name $version" >&2
+                  return 1
+                fi
+                workspace_names[$package_name]=$relative
+                if grep -Fq 'path@' "$manifest"; then
+                  echo "Published package $name $version contains a path dependency in $relative" >&2
+                  return 1
+                fi
+                while IFS= read -r dependency; do
+                  [ -n "$dependency" ] || continue
+                  dependency_name=${dependency#workspace@}
+                  [[ "$dependency_name" =~ ^[a-z0-9_-]{2,}$ ]] || {
+                    echo "Invalid workspace dependency $dependency in $relative" >&2
+                    return 1
+                  }
+                  dependency_relative="workspace/$dependency_name"
+                  validate_workspace_manifest "$dependency_relative" || return 1
+                done < <(grep -oE 'workspace@[a-zA-Z0-9_-]+' "$manifest" | sort -u || true)
+                workspace_state[$relative]=done
+              }
+              validate_workspace_manifest "."
+              while IFS= read -r embedded_manifest; do
+                relative=${embedded_manifest#"$work/"}
+                relative=${relative%/encore.toml}
+                validate_workspace_manifest "$relative"
+              done < <(find "$work/workspace" -mindepth 2 -maxdepth 2 -type f -name encore.toml -print 2>/dev/null | sort)
+              unset workspace_state workspace_names
+              unset -f validate_workspace_manifest
               rm -rf "$work"
             done < <(jq -r '.versions[] | [.version, .archive, .checksum] | @tsv' "$file")
           done

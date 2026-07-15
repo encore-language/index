@@ -15,8 +15,11 @@ registry server and no `encore publish` command in Encore v1.
 7. Open a pull request containing only the package metadata change.
 
 Package names must match `^[a-z0-9_-]{2,}$`. Published manifests may use
-`index@` or explicit `git@` dependencies but may not use local `path@`
-dependencies.
+`index@`, `workspace@`, or explicit `git@` dependencies but may not use local
+`path@` dependencies. A `workspace@name` dependency must be included in the
+same archive at `workspace/name`, with its own `encore.toml` and `src/` tree.
+Embedded refrains may depend on each other, but cycles and duplicate project
+names within a distribution are rejected.
 
 ```json
 {
@@ -56,8 +59,10 @@ Index CI verifies:
 - unique versions and immutable existing records;
 - HTTPS GitHub archive URLs and lowercase SHA-256 values;
 - downloaded archive checksum and safe member paths;
+- absence of links and special files in archives;
 - root `encore.toml` name/version identity;
-- absence of `path@` dependencies in published manifests.
+- absence of `path@` dependencies in every bundled manifest;
+- complete, acyclic `workspace@` dependencies and unique refrain names.
 
 Maintainers additionally review source ownership, licensing, dependency
 choices, package quality, and test evidence. Passing CI does not guarantee
